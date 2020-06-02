@@ -3,5 +3,4 @@
 
 // Función para activar y desactivar el indicador de alarma
 // (valor=0:desactivar, valor=1:activar)
-
 void indicador(int valor);
