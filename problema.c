@@ -103,11 +103,12 @@ int main(int argc, char **_argv){
     printf("Finalizando hilos.\n");
 
     // Para finalizar el hilo asociado a alarm enviamos
-    // SIGRTMAX por si está esperando para continuar (en sigwaitinfo).
+    // SIGRTMAX por si está esperando para continuar (en sigwaitinfo)
+    // y por tanto se apagará el indicador si está encendido.
     kill(getpid(), SIGRTMAX); 
     // Para finalizar el hilo asociado a signalCalc forzamos la señal 
-    // de fin de ciclo del temporizador (SIGALRM) y como no se están
-    // recibiendo señales, el bucle terminará rápido.
+    // de fin de ciclo del temporizador (SIGALRM), aunque si se está en medio 
+    // de una decodificación primero terminará eso.
     kill(getpid(), SIGALRM); 
 
     // Espera de la terminación de los hilos.
@@ -250,6 +251,8 @@ void *signalCalc(void *p){
 
 ////////////////////////////////////////////////// HILO ALARMA //////////////////////////////////////////////////
 void *alarm(void *p){ 
+    //Inicializamos el indicador apagado.
+    indicador(0);
     // Creamos el conjunto de señales que contendrá 
     // la señal SIGRTMAX que es la señal que apaga el indicador.
     sigset_t turnOff;
