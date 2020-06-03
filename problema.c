@@ -19,7 +19,7 @@ int overflowedSignals = 0;  // Nº de señales que tienen valor mayor que vlimit
 int emptyCycle = 0;         // Nº de ciclos seguidos en los que no se ha recibido ninguna señal.
 
 // Temporizador POSIX 1003.1b (declarado absoluto para recoger el tiempo absoluto).
-timer_t tiempo;
+timer_t time;
 
 // Flag de fin de programa (para que los hilos lleguen a su fin y se pueda hacer join).
 int end = 0;
@@ -45,10 +45,10 @@ int main(int argc, char **_argv){
     sscanf(_argv[3], "%d", nmaxcic);    
 
     // Recepción de las señales (el manejador no se usa ya que usaremos sigwaitinfo).
-    struct sigaction acc; 
-    acc.sa_flags=SA_SIGINFO;    // Usando 1003.1b hay que usar este flag para asegurar funcionamiento.
-    acc.sa_sigaction = handle;  // Manejador.
-    sigemptyset(&acc.sa_mask);  // No se usa máscara.
+    struct sigaction act; 
+    act.sa_flags=SA_SIGINFO;    // Usando 1003.1b hay que usar este flag para asegurar funcionamiento.
+    act.sa_sigaction = handle;  // Manejador.
+    sigemptyset(&act.sa_mask);  // No se usa máscara.
 
     // Definición del conjunto de señales que se espera recibir.
     sigset_t expectedSignals;
@@ -56,7 +56,7 @@ int main(int argc, char **_argv){
     sigemptyset(&expectedSignals);
 
     for(int i=0; i<N_SIG; i++){
-        sigaction(SIGRTMIN+i, &acc, NULL);          // Asociamos la acción (que es solo recibirlas) a las señales.
+        sigaction(SIGRTMIN+i, &act, NULL);          // Asociamos la acción (que es solo recibirlas) a las señales.
         sigaddset(&expectedSignals, SIGRTMIN+i);    // Añadimos al conjunto de señales las de tipo SIGRTMIN+i.
     }
     // Añadimos SIGALRM al conjunto.
@@ -77,15 +77,15 @@ int main(int argc, char **_argv){
     // (ya que las anteriores han sido ya bloqueadas).
     sigemptyset(&expectedSignals);
     // Asociamos la acción de recepción a la señal SIGTERM.
-    sigaction(SIGTERM, &acc, NULL);
+    sigaction(SIGTERM, &act, NULL);
     // Metemos SIGTERM en el conjunto.
     sigaddset(&expectedSignals, SIGTERM);
 
     // El programa principal espera hasta que recibe una señal de tipo SIGTERM 
     // (que se puede recibir como señal independiente o del hilo signalCalc 
     // si no se reciben señales en un tiempo determinado).
-    siginfo_t inf; // Necesario para definir sigwaitinfo.
-    sigwaitinfo(&expectedSignals, &inf);
+    siginfo_t info; // Necesario para definir sigwaitinfo.
+    sigwaitinfo(&expectedSignals, &info);
     printf("Finalización de programa solicitada.\n");
 
     pthread_mutex_lock(&mut_no_llegan);////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -164,9 +164,9 @@ void *signalCalc(void *p){
     event.sigev_notify = SIGEV_SIGNAL;
 
     // Creación del temporizador con el evento programado.
-    timer_create(CLOCK_REALTIME, &event, &tiempo);
+    timer_create(CLOCK_REALTIME, &event, &time);
     // Programación del temporizador con el comportamiento programado.
-    timer_settime(tiempo, 0, &cycle, NULL);
+    timer_settime(time, 0, &cycle, NULL);
 
     // Inicialización del conjunto de señales signalSet.
     sigset_t signalSet;
