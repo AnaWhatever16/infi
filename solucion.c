@@ -111,7 +111,7 @@ int main(int argc, char **_argv){
     // Espera de la terminación de los hilos.
     pthread_join(sC, NULL); 
     pthread_join(aM, NULL); 
-    pthread_join(sE, NULL)
+    pthread_join(sE, NULL); 
 
     printf("Hilos finalizados.\n");
     printf("Fin de programa.\n");
