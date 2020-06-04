@@ -3,14 +3,16 @@
 
 #include "signalMessagesExample.h"
 
-void ejemplo1(){
-    printf("Ejemplo 1.\n");
+void testExample1(){
     kill(getpid(), SIGRTMIN+1);
     kill(getpid(), SIGRTMIN);
+    sleep(1);
+    kill(getpid(), SIGRTMIN+1);
+    kill(getpid(), SIGRTMAX);
 }
-void ejemplo2(){
+void testExample2(){
 
 }
-void ejemplo3(){
+void testExample3(){
 
 }

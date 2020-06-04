@@ -17,6 +17,7 @@
 int tciclo;     // Nº de milisegundos por ciclo.
 float vlimite;  // Máximo valor que pueden tener las señales físicas (nº señales/segundo = unidad de medida física).
 int nmaxcic;    // Nº de ciclos máximo que podemos estar sin recibir señales de tipo SIGRTMIN+i.
+int example;    // Ejemplo que se desea utilizar
 
 // Otra variable compartida que si requerirá mutex porque 
 // variará su valor durante la ejecución del programa
@@ -44,9 +45,15 @@ void *signalExamples(void *p);
 int main(int argc, char **_argv){
 
     // Guardar argumentos de la linea de comandos.
-    sscanf(_argv[1], "%d", &tciclo);        
-    sscanf(_argv[2], "%f", &vlimite);    
-    sscanf(_argv[3], "%d", &nmaxcic);    
+    printf("Variables utilizadas:\n");
+    sscanf(_argv[1], "%d", &tciclo);    printf("tciclo = %d\n", tciclo);       
+    sscanf(_argv[2], "%f", &vlimite);   printf("vlimite = %f\n", vlimite); 
+    sscanf(_argv[3], "%d", &nmaxcic);   printf("nmaxcic = %d\n", nmaxcic);
+
+    // Escoger ejemplo por línea de comandos.
+    printf("Indique cual de los %d ejemplos desea utilizar: ", N_EXAMPLES);
+    scanf("%d", &example);
+    printf("----------------------------------------------------------\n");
 
     // Recepción de las señales (el manejador no se usa ya que usaremos sigwaitinfo).
     struct sigaction act; 
@@ -63,18 +70,20 @@ int main(int argc, char **_argv){
         sigaction(SIGRTMIN+i, &act, NULL);          // Asociamos la acción (que es solo recibirlas) a las señales.
         sigaddset(&expectedSignals, SIGRTMIN+i);    // Añadimos al conjunto de señales las de tipo SIGRTMIN+i.
     }
-    // Añadimos SIGALRM al conjunto.
-    sigaddset(&expectedSignals, SIGALRM); 
+    // Añadimos SIGRTMAX y SIGALRM al conjunto.
+    sigaddset(&expectedSignals, SIGRTMAX); 
+    sigaddset(&expectedSignals, SIGALRM);
 
     // Máscara utilizada para bloquear las señales hasta ahora añadidas a expectedSignals
-    // para que solo las puedan usar en sigwaitinfo en los hilos correspondientes.
+    // para que solo las puedan usar en sigwaitinfo en los hilos correspondientes
+    // (si no se hiciese esto el programa no funciona correctamente).
     pthread_sigmask(SIG_BLOCK, &expectedSignals, NULL);
 
     // Variables que reciben el identificador de los hilos.
     pthread_t sC;   //signalCalc.
-    pthread_t aM;  // alarmManage.
-    pthread_t sE;
-    // Creamos los hilos del cálculo de las señales y de alarma.
+    pthread_t aM;   // alarmManage.
+    pthread_t sE;   //signalExamples
+    // Creamos los hilos del cálculo de las señales, de alarma y el de ejecución de los ejemplos.
     pthread_create(&sC, NULL, signalCalc, NULL);
     pthread_create(&aM, NULL, alarmManage, NULL);
     pthread_create(&sE, NULL, signalExamples,NULL);
@@ -86,6 +95,8 @@ int main(int argc, char **_argv){
     sigaction(SIGTERM, &act, NULL);
     // Metemos SIGTERM en el conjunto.
     sigaddset(&expectedSignals, SIGTERM);
+    // Esta señal no la bloqueamos porque no la recibirán los hilos, sino el 
+    // programa principal.
 
     // El programa principal espera hasta que recibe una señal de tipo SIGTERM 
     // (que se puede recibir como señal independiente o del hilo signalCalc 
@@ -99,19 +110,21 @@ int main(int argc, char **_argv){
     end=1;
     printf("Finalizando hilos.\n");
     
-    // Para finalizar el hilo asociado a alarmManage enviamos
-    // SIGRTMAX por si está esperando para continuar (en sigwaitinfo)
-    // y por tanto se apagará el indicador si está encendido.
-    pthread_kill(aM, SIGRTMAX); 
     // Para finalizar el hilo asociado a signalCalc forzamos la señal 
-    // de fin de ciclo del temporizador (SIGALRM), aunque si se está en medio 
-    // de una decodificación primero terminará eso.
-    pthread_kill(sC, SIGALRM); 
+    // de fin de ciclo del temporizador (SIGALRM) (aunque si se está en medio 
+    // de una decodificación primero terminará eso).
+    kill(getpid(), SIGALRM); 
+    
+    // Para finalizar el hilo asociado a alarmManage enviamos
+    // SIGRTMAX, para terminar la espera en sigwaitinfo,
+    // y por tanto se apagará el indicador (si estaba apagada se encenderá
+    // y luego se apagará).
+    kill(getpid(), SIGRTMAX); 
 
-    // Espera de la terminación de los hilos.
+    // Espera de la finalización de los hilos.
     pthread_join(sC, NULL); 
     pthread_join(aM, NULL); 
-    pthread_join(sE, NULL); 
+    pthread_join(sE, NULL);
 
     printf("Hilos finalizados.\n");
     printf("Fin de programa.\n");
@@ -186,7 +199,7 @@ void *signalCalc(void *p){
         if(receivedSignal==SIGALRM){ // Si la señal que se recibe es un fin de ciclo de reloj.
             printf("Ciclo de reloj terminado\n");
 
-            noSignal = 0;           // Inicializamos contador de señales no recibidas.
+            noSignal = 0; // Inicializamos contador de señales no recibidas.
 
             // overflowedSignals es una variable compartida con el hilo asociado a alarmManage por
             // lo que es necesario usar mutex para bloquear el uso simultáneo de esta variable. 
@@ -198,12 +211,15 @@ void *signalCalc(void *p){
             // Se calcula el valor de las señales dependiendo de la frecuencia con la que hayan llegado.
             printf("Los valores de las distintas señales son:\n");
             for(int i=0; i<N_SIG; i++){ // Vamos a ver cada una de las señales SIGRTMIN+i por separado.
+
                 if(signalCount[i]==0){ // Si no se han recibido señales de este tipo.
                     // Contamos que uno de los tipos de señales no ha llegado.
                     noSignal++;
+
                     if(noSignal==N_SIG){ // Esto quiere decir que no ha llegado ninguna señal en este ciclo de reloj.
                         printf("No se ha recibido ninguna señal.\n");
                         emptyCycle++;
+
                         if(emptyCycle==nmaxcic){ // Si ha habido un número de ciclos vacíos igual al máximo permitido seguidos.
                             printf("Finalización de programa porque han pasado %i ciclos sin recibirse señales.\n", nmaxcic);
                             kill(getpid(),SIGTERM); // Se envía la señal SIGTERM para terminar el programa.
@@ -246,7 +262,8 @@ void *signalCalc(void *p){
                 }
             }
 
-            // Para empezar la cuenta de nuevo a 0
+            // Ya se han hecho los cálculos en este ciclo de reloj.
+            // Para empezar la cuenta de nuevo ponemos todo a 0
             for(int i=0; i<N_SIG; i++){ 
                 signalCount[i]=0; 
                 signalValue[i]=0.0; 
@@ -260,6 +277,19 @@ void *signalCalc(void *p){
             signalCount[receivedSignal-SIGRTMIN]++;
         }
     }
+
+    // overflowedSignals es una variable compartida con el hilo asociado a alarmManage por
+    // lo que es necesario usar mutex para bloquear el uso simultáneo de esta variable.
+    pthread_mutex_lock(&mut_overflowedSignals);
+    // Para terminar el programa hay que asegurarse que alarma no se quede esperando
+    // en la variable de condición por lo que hacemos que overflowedSignals tenga
+    // un valor exageradamente grande para que salga del while.
+    overflowedSignals=1000;
+    // Además enviamos que la variable de condición se ha cumplido para que desbloqueee
+    // de la espera.
+    pthread_cond_signal(&cv_overflowedSignals);
+    // Liberamos el mutex porque ya hemos terminado de usar overflowedSignal.
+    pthread_mutex_unlock(&mut_overflowedSignals);
 }
 
 ////////////////////////////////////////////////// HILO ALARMA //////////////////////////////////////////////////
@@ -291,13 +321,15 @@ void *alarmManage(void *p){
             // la variable de condición para continuar. Se saldrá del while y se continuará a 
             // encender el indicador.
             pthread_cond_wait(&cv_overflowedSignals, &mut_overflowedSignals);
+            // Como se ha cumplido la condición encendemos el indicador.
+            // Lo encendemos dentro del while por si se recibe rápidamente que 
+            // la condición se vuelve a cumplir. Si estuviese fuera es posible 
+            // que si esto sucede demasiado rápido el indicador no se encendierá.
+            indicador(1);
         }
 
         // Liberamos el mutex porque ya hemos terminado de usar overflowedSignals.
         pthread_mutex_unlock(&mut_overflowedSignals);
-
-        // Como se ha cumplido la condición encendemos el indicador.
-        indicador(1);
 
         // Esperamos que llegue la señal SIGRTMAX.
         sigwaitinfo(&turnOff, &info);
@@ -308,5 +340,22 @@ void *alarmManage(void *p){
 }
 
 void *signalExamples(void *p){
-    ejemplo1();
+    switch (example){
+        case 1:
+        {
+            testExample1();
+            break;
+        }
+        case 2:
+        {
+            testExample2();
+            break;
+        }
+        case 3:
+        {
+            testExample3();
+            break;
+        }
+
+    }
 }
