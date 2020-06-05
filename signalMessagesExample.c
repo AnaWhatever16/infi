@@ -6,11 +6,14 @@
 void testExample1(){
     kill(getpid(), SIGRTMIN+1);
     kill(getpid(), SIGRTMIN);
+    kill(getpid(), SIGRTMIN+2);
     sleep(1);
     kill(getpid(), SIGRTMIN+1);
     kill(getpid(), SIGRTMAX);
 }
 void testExample2(){
+    kill(getpid(), SIGRTMIN);
+    sleep(0.5);
 
 }
 void testExample3(){

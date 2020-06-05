@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 199506L     // POSIX 1003.1c para hilos.
+
 #include <unistd.h>                 // POSIX.
 #include <stdlib.h>                 // Macros.
 #include <stdio.h>                  // Input/output para sscanf y printf.
@@ -6,6 +7,13 @@
 #include <string.h>                 // Para tratar los string.
 #include <pthread.h>                // Hilos.
 #include <signal.h>                 // Señales.
+#include <mqueue.h>                 // Para las colas de mensajes
+
+#define COMMANDER   "/commander-queue"
+#define QUEUE_PERMISSIONS 0660
+#define MAX_MESSAGES 10
+#define MAX_MSG_SIZE 256
+#define MSG_BUFFER_SIZE MAX_MSG_SIZE + 10
 
 #include "problema.h"               // Cabecera dada por problema.
 #include "signalMessagesExample.h"  // Cabecera de ejemplos de envíos de señales
@@ -39,9 +47,12 @@ void handeling(int signo, siginfo_t *info, void *p){}
 // Definición de las funciones de los hilos.
 void *signalCalc(void *p);
 void *alarmManage(void *p);
+void *messageReceiver(void *p);
 void *signalExamples(void *p);
 
 ////////////////////////////////////////////////////// MAIN //////////////////////////////////////////////////////
+// Se encarga de recoger las variables del problema, gestionar los hilos y sus señales y
+// de recibir el fin del programa (con la recepción de la señal SIGTERM).
 int main(int argc, char **_argv){
 
     // Guardar argumentos de la linea de comandos.
@@ -80,12 +91,14 @@ int main(int argc, char **_argv){
     pthread_sigmask(SIG_BLOCK, &expectedSignals, NULL);
 
     // Variables que reciben el identificador de los hilos.
-    pthread_t sC;   //signalCalc.
+    pthread_t sC;   // signalCalc.
     pthread_t aM;   // alarmManage.
-    pthread_t sE;   //signalExamples
-    // Creamos los hilos del cálculo de las señales, de alarma y el de ejecución de los ejemplos.
+    pthread_t mR;   // messageReceiver
+    pthread_t sE;   // signalExamples
+    // Creamos los hilos.
     pthread_create(&sC, NULL, signalCalc, NULL);
     pthread_create(&aM, NULL, alarmManage, NULL);
+    pthread_create(&mR, NULL, messageReceiver, NULL);
     pthread_create(&sE, NULL, signalExamples,NULL);
 
     // Reutilizamos el conjunto de señales para procesar otras 
@@ -103,12 +116,16 @@ int main(int argc, char **_argv){
     // si no se reciben señales en un tiempo determinado).
     siginfo_t info; // Necesario para definir sigwaitinfo.
     sigwaitinfo(&expectedSignals, &info);
+    printf("\033[1;31m");
     printf("Finalización de programa solicitada.\n");
+    printf("\033[0m");
 
     // Finalizamos los hilos haciendo que salgan de sus respectivos 
     // bucles while activando el flag end.
     end=1;
+    printf("\033[1;31m");
     printf("Finalizando hilos.\n");
+    printf("\033[0m");
     
     // Para finalizar el hilo asociado a signalCalc forzamos la señal 
     // de fin de ciclo del temporizador (SIGALRM) (aunque si se está en medio 
@@ -124,15 +141,22 @@ int main(int argc, char **_argv){
     // Espera de la finalización de los hilos.
     pthread_join(sC, NULL); 
     pthread_join(aM, NULL); 
+    pthread_join(mR, NULL);
     pthread_join(sE, NULL);
 
+    printf("\033[1;31m");
     printf("Hilos finalizados.\n");
     printf("Fin de programa.\n");
+    printf("\033[0m");
 
     return 0;
 }
 
 ////////////////////////////////////// HILO CALCULO VALORES DE LAS SEÑALES //////////////////////////////////////
+// Este es el hilo principal del programa. Es el encargado de calcular los valores de las 
+// señales físicas externas que vienen representadas por la frecuencia de recepción de señales
+// de tipo SIRTMIN+i. Para ello se tiene que definir un temporizador que nos marcará ciclos 
+// de tiempo que usaremos para el cálculo de la frecuencia con la que llegan las señales.  
 void *signalCalc(void *p){
     int receivedSignal;         // Valor de la señal que se recibirá a través de sigwaitinfo.
     int signalCount[N_SIG];     // Vector que contará cuantas señales de cada tipo han llegado en cada ciclo de reloj.
@@ -197,7 +221,7 @@ void *signalCalc(void *p){
         receivedSignal=sigwaitinfo(&signalSet, &in);
 
         if(receivedSignal==SIGALRM){ // Si la señal que se recibe es un fin de ciclo de reloj.
-            printf("Ciclo de reloj terminado\n");
+            printf("Ciclo de reloj terminado.\n");
 
             noSignal = 0; // Inicializamos contador de señales no recibidas.
 
@@ -221,7 +245,9 @@ void *signalCalc(void *p){
                         emptyCycle++;
 
                         if(emptyCycle==nmaxcic){ // Si ha habido un número de ciclos vacíos igual al máximo permitido seguidos.
+                            printf("\033[1;31m");
                             printf("Finalización de programa porque han pasado %i ciclos sin recibirse señales.\n", nmaxcic);
+                            printf("\033[0m");
                             kill(getpid(),SIGTERM); // Se envía la señal SIGTERM para terminar el programa.
                         }
                     }
@@ -268,6 +294,7 @@ void *signalCalc(void *p){
                 signalCount[i]=0; 
                 signalValue[i]=0.0; 
             }
+            printf("----------------------------------------------------------\n");
         }
         else{ // Si no es SIGALRM será una de las señales de tipo SIGRTMIN + i.
             // Cada posición del vector está asociada a una de las señales por lo que si 
@@ -293,6 +320,8 @@ void *signalCalc(void *p){
 }
 
 ////////////////////////////////////////////////// HILO ALARMA //////////////////////////////////////////////////
+// Hilo de gestión de la alarma. Dependiendo de la condición establecida
+// se encenderá o apagará un indicador (programado en problema.c/.h).
 void *alarmManage(void *p){ 
     //Inicializamos el indicador apagado.
     indicador(0);
@@ -339,6 +368,89 @@ void *alarmManage(void *p){
     }
 }
 
+////////////////////////////////////////////// HILO RECIBE MENSAJES //////////////////////////////////////////////
+// Hilo de tipo cliente. Se encargará de recibir mensajes de un servidor y dependiendo de su contenido 
+// se realizarán distintas acciones.
+void *messageReceiver(void *p){
+    mqd_t commander, receiver; // id de las colas de mensajes
+    char receiverName[64];
+
+    sprintf(receiverName, "/receiver-queue-%d", getpid());
+
+    struct mq_attr attr;
+    attr.mq_flags   = 0; 
+    attr.mq_maxmsg  = MAX_MESSAGES;
+    attr.mq_msgsize = MAX_MSG_SIZE;   
+    attr.mq_curmsgs = 0;
+
+    if ((receiver = mq_open(receiverName, O_RDONLY | O_CREAT, QUEUE_PERMISSIONS, &attr)) == -1) {
+        printf("\033[1;31m");
+        printf("Fin de programa por error al crear recepción de mensajes.\n");
+        printf("\033[0m");
+        kill(getpid(), SIGTERM);
+    }
+
+    if ((commander= mq_open(COMMANDER, O_WRONLY)) == -1){
+        printf("\033[1;31m");
+        printf("Fin de programa por no poder contactar programa de comandos.\n");
+        printf("\033[0m");
+        kill(getpid(), SIGTERM);
+    }
+
+    char inputBuffer[MSG_BUFFER_SIZE];
+    int commandReceived;
+
+    while(end!=1){
+        
+        if (mq_send (commander, receiverName, strlen(receiverName)+1, 0) == -1) {
+            printf("\033[1;31m");
+            printf("Fin de programa por no contactar con comandos.\n");
+            printf("\033[0m");
+            kill(getpid(), SIGTERM);
+        }
+
+        if (mq_receive (receiver, inputBuffer, MSG_BUFFER_SIZE, NULL) == -1) {
+            printf("\033[1;31m");
+            printf("Fin de programa por mala recepción.\n");
+            printf("\033[0m");
+            kill(getpid(), SIGTERM);
+        }
+
+        sscanf(inputBuffer, "%d", &commandReceived);
+
+        switch (commandReceived)
+        {
+        case 0:
+        {
+            printf("\033[1;31m");
+            printf("Fin de programa solicitado desde terminal.\n");
+            printf("\033[0m");
+            kill(getpid(), SIGTERM);
+            sleep(0.1);
+            break;
+        }
+        
+        default:
+            printf("%d\n",commandReceived);
+            break;
+        }
+    }
+
+    if (mq_close (receiver) == -1) {
+        perror ("Error al cerrar.\n");
+        exit (1);
+    }
+
+    if (mq_unlink (receiverName) == -1) {
+        perror ("Error al cerrar.\n");
+        exit (1);
+    }
+
+}
+
+//////////////////////////////////////////////// HILO EJEMPLOS ////////////////////////////////////////////////
+// Hilo que llama a varias funciones que contienen envío de señales. 
+// El ejemplo a utilizar se escoge por terminal al principio del programa.
 void *signalExamples(void *p){
     switch (example){
         case 1:
@@ -348,7 +460,9 @@ void *signalExamples(void *p){
         }
         case 2:
         {
-            testExample2();
+            while (end!=1){
+                testExample2(end);
+            }
             break;
         }
         case 3:
