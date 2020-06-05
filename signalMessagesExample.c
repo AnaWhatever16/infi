@@ -13,7 +13,7 @@ void testExample1(){
 }
 void testExample2(){
     kill(getpid(), SIGRTMIN);
-    sleep(0.5);
+    usleep(500000);
 
 }
 void testExample3(){

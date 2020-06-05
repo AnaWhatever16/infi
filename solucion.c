@@ -36,6 +36,7 @@ timer_t timerDef;
 
 // Flag de fin de programa (para que los hilos lleguen a su fin y se pueda hacer join).
 int end = 0;
+int out = 0;
 
 // Mutex y variables de condición asociadas a la variable overflowedSignals.
 pthread_mutex_t mut_overflowedSignals       = PTHREAD_MUTEX_INITIALIZER;
@@ -49,6 +50,7 @@ void *signalCalc(void *p);
 void *alarmManage(void *p);
 void *messageReceiver(void *p);
 void *signalExamples(void *p);
+
 
 ////////////////////////////////////////////////////// MAIN //////////////////////////////////////////////////////
 // Se encarga de recoger las variables del problema, gestionar los hilos y sus señales y
@@ -137,6 +139,12 @@ int main(int argc, char **_argv){
     // y por tanto se apagará el indicador (si estaba apagada se encenderá
     // y luego se apagará).
     kill(getpid(), SIGRTMAX); 
+
+    if(out == 0){
+        printf("\033[1;32m");
+        printf("Pulse 0 en el terminal de comandos para finalizar programa :)\n");
+        printf("\033[0m");
+    }
 
     // Espera de la finalización de los hilos.
     pthread_join(sC, NULL); 
@@ -264,7 +272,7 @@ void *signalCalc(void *p){
                     // El casteo es necesario ya que la mayoría de las variables son int.
                     // Se divide millisec/1000 porque lo queremos en segundos.
                     signalValue[i] = (float)signalCount[i]/((float)seconds+(float)millisec/1000.0);
-                    printf("-> SIGRTMIN + %i = %f\n", i, signalValue[i]);
+                    printf("-> SIGRTMIN + %i (%d)= %f\n", i, signalCount[i], signalValue[i]);
 
                     // overflowedSignals es una variable compartida con el hilo asociado a alarmManage por
                     // lo que es necesario usar mutex para bloquear el uso simultáneo de esta variable. 
@@ -372,7 +380,7 @@ void *alarmManage(void *p){
 // Hilo de tipo cliente. Se encargará de recibir mensajes de un servidor y dependiendo de su contenido 
 // se realizarán distintas acciones.
 void *messageReceiver(void *p){
-    mqd_t commander, receiver; // id de las colas de mensajes
+    mqd_t receiver, commander; // id de las colas de mensajes
     char receiverName[64];
 
     sprintf(receiverName, "/receiver-queue-%d", getpid());
@@ -425,6 +433,8 @@ void *messageReceiver(void *p){
             printf("\033[1;31m");
             printf("Fin de programa solicitado desde terminal.\n");
             printf("\033[0m");
+
+            out = 1;
             kill(getpid(), SIGTERM);
             sleep(0.1);
             break;
