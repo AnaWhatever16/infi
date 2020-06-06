@@ -8,12 +8,13 @@
 #include <pthread.h>                // Hilos.
 #include <signal.h>                 // Señales.
 #include <mqueue.h>                 // Para las colas de mensajes
+#include <sys/stat.h>
 
-#define COMMANDER   "/commander-queue"
-#define QUEUE_PERMISSIONS 0660
-#define MAX_MESSAGES 10
-#define MAX_MSG_SIZE 256
-#define MSG_BUFFER_SIZE MAX_MSG_SIZE + 10
+#define COMMANDER   "/commander-queue"      // Nombre de la cola de comandos
+#define MAX_MESSAGES 10                     // Máximo nº de mensajes para la cola
+#define MAX_MSG_SIZE 256                    // Tamaño máximo de mensaje
+#define MSG_BUFFER_SIZE MAX_MSG_SIZE + 10   // Tamaño de mensaje en buffer 
+                                            // (le sumamos 10 al máximo para darle margen)
 
 #include "problema.h"               // Cabecera dada por problema.
 #include "signalMessagesExample.h"  // Cabecera de ejemplos de envíos de señales
@@ -36,6 +37,7 @@ timer_t timerDef;
 
 // Flag de fin de programa (para que los hilos lleguen a su fin y se pueda hacer join).
 int end = 0;
+// Flag para indicar si se ha pedido fin de programa por linea de comando
 int out = 0;
 
 // Mutex y variables de condición asociadas a la variable overflowedSignals.
@@ -97,6 +99,7 @@ int main(int argc, char **_argv){
     pthread_t aM;   // alarmManage.
     pthread_t mR;   // messageReceiver
     pthread_t sE;   // signalExamples
+
     // Creamos los hilos.
     pthread_create(&sC, NULL, signalCalc, NULL);
     pthread_create(&aM, NULL, alarmManage, NULL);
@@ -118,16 +121,12 @@ int main(int argc, char **_argv){
     // si no se reciben señales en un tiempo determinado).
     siginfo_t info; // Necesario para definir sigwaitinfo.
     sigwaitinfo(&expectedSignals, &info);
-    printf("\033[1;31m");
-    printf("Finalización de programa solicitada.\n");
-    printf("\033[0m");
+    printf("\033[1;31mFinalización de programa solicitada.\n\033[0m");
 
     // Finalizamos los hilos haciendo que salgan de sus respectivos 
     // bucles while activando el flag end.
     end=1;
-    printf("\033[1;31m");
-    printf("Finalizando hilos.\n");
-    printf("\033[0m");
+    printf("\033[1;31mFinalizando hilos.\n\033[0m");
     
     // Para finalizar el hilo asociado a signalCalc forzamos la señal 
     // de fin de ciclo del temporizador (SIGALRM) (aunque si se está en medio 
@@ -140,10 +139,13 @@ int main(int argc, char **_argv){
     // y luego se apagará).
     kill(getpid(), SIGRTMAX); 
 
+    // El programa se queda sin finalizar el hilo de messageReceiver si llega
+    // SIGTERM desde una orden fuera del terminal de comandos. Por ello es necesario que desde 
+    // dicho terminal se envíe el mensaje de fin de programa (0) y para
+    // ello se pide con este print (se verá en verde). Esta solución sincroniza además
+    // que se cierre el terminal de comandos junto al programa principal.
     if(out == 0){
-        printf("\033[1;32m");
-        printf("Pulse 0 en el terminal de comandos para finalizar programa :)\n");
-        printf("\033[0m");
+        printf("\033[1;32mPulse 0 en el terminal de comandos para finalizar programa :)\n\033[0m");
     }
 
     // Espera de la finalización de los hilos.
@@ -152,10 +154,7 @@ int main(int argc, char **_argv){
     pthread_join(mR, NULL);
     pthread_join(sE, NULL);
 
-    printf("\033[1;31m");
-    printf("Hilos finalizados.\n");
-    printf("Fin de programa.\n");
-    printf("\033[0m");
+    printf("\033[1;31mHilos finalizados.\nFin de programa.\n\033[0m");
 
     return 0;
 }
@@ -253,9 +252,7 @@ void *signalCalc(void *p){
                         emptyCycle++;
 
                         if(emptyCycle==nmaxcic){ // Si ha habido un número de ciclos vacíos igual al máximo permitido seguidos.
-                            printf("\033[1;31m");
-                            printf("Finalización de programa porque han pasado %i ciclos sin recibirse señales.\n", nmaxcic);
-                            printf("\033[0m");
+                            printf("\033[1;31mFinalización de programa porque han pasado %i ciclos sin recibirse señales.\n\033[0m", nmaxcic);
                             kill(getpid(),SIGTERM); // Se envía la señal SIGTERM para terminar el programa.
                         }
                     }
@@ -391,17 +388,13 @@ void *messageReceiver(void *p){
     attr.mq_msgsize = MAX_MSG_SIZE;   
     attr.mq_curmsgs = 0;
 
-    if ((receiver = mq_open(receiverName, O_RDONLY | O_CREAT, QUEUE_PERMISSIONS, &attr)) == -1) {
-        printf("\033[1;31m");
-        printf("Fin de programa por error al crear recepción de mensajes.\n");
-        printf("\033[0m");
+    if ((receiver = mq_open(receiverName, O_RDONLY | O_CREAT, S_IRWXU, &attr)) == -1) {
+        printf("\033[1;31mFin de programa por error al crear recepción de mensajes.\n\033[0m");
         kill(getpid(), SIGTERM);
     }
 
     if ((commander= mq_open(COMMANDER, O_WRONLY)) == -1){
-        printf("\033[1;31m");
-        printf("Fin de programa por no poder contactar programa de comandos.\n");
-        printf("\033[0m");
+        printf("\033[1;31mFin de programa por no poder contactar programa de comandos.\n\033[0m");
         kill(getpid(), SIGTERM);
     }
 
@@ -411,16 +404,12 @@ void *messageReceiver(void *p){
     while(end!=1){
         
         if (mq_send (commander, receiverName, strlen(receiverName)+1, 0) == -1) {
-            printf("\033[1;31m");
-            printf("Fin de programa por no contactar con comandos.\n");
-            printf("\033[0m");
+            printf("\033[1;31mFin de programa por no contactar con comandos.\n033[0m");
             kill(getpid(), SIGTERM);
         }
 
         if (mq_receive (receiver, inputBuffer, MSG_BUFFER_SIZE, NULL) == -1) {
-            printf("\033[1;31m");
-            printf("Fin de programa por mala recepción.\n");
-            printf("\033[0m");
+            printf("\033[1;31mFin de programa por mala recepción.\n\033[0m");
             kill(getpid(), SIGTERM);
         }
 
@@ -430,13 +419,11 @@ void *messageReceiver(void *p){
         {
         case 0:
         {
-            printf("\033[1;31m");
-            printf("Fin de programa solicitado desde terminal.\n");
-            printf("\033[0m");
+            printf("\033[1;31mFin de programa solicitado desde terminal.\n\033[0m");
 
             out = 1;
             kill(getpid(), SIGTERM);
-            sleep(0.1);
+            sleep(1);
             break;
         }
         

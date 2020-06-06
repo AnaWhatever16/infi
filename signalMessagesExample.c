@@ -12,6 +12,9 @@ void testExample1(){
     kill(getpid(), SIGRTMAX);
 }
 void testExample2(){
+    kill(getpid(), SIGRTMIN+1);
+    kill(getpid(), SIGRTMIN+2);
+    kill(getpid(), SIGRTMIN+3);
     kill(getpid(), SIGRTMIN);
     usleep(500000);
 

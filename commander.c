@@ -2,9 +2,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <mqueue.h>
+#include <sys/stat.h>
 
 #define COMMANDER   "/commander-queue"
-#define QUEUE_PERMISSIONS 0660
 #define MAX_MESSAGES 10
 #define MAX_MSG_SIZE 256
 #define MSG_BUFFER_SIZE MAX_MSG_SIZE + 10
@@ -20,7 +20,7 @@ int main (int argc, char **argv)
     attr.mq_msgsize = MAX_MSG_SIZE;
     attr.mq_curmsgs = 0;
 
-    if ((commander = mq_open (COMMANDER, O_RDONLY | O_CREAT, QUEUE_PERMISSIONS, &attr)) == -1) {
+    if ((commander = mq_open (COMMANDER, O_RDONLY | O_CREAT, S_IRWXU, &attr)) == -1) {
         perror ("Fallo de terminal de comandos.");
         exit (1);
     }
