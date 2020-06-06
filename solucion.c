@@ -8,9 +8,10 @@
 #include <pthread.h>                // Hilos.
 #include <signal.h>                 // Señales.
 #include <mqueue.h>                 // Para las colas de mensajes
-#include <sys/stat.h>
+#include <sys/stat.h>               // Macros.
 
-#define COMMANDER   "/commander-queue"      // Nombre de la cola de comandos
+#define COMMANDER   "/commander-queue"      // Nombre de la cola de comandos (la declaramos aquí para que 
+                                            // tenga el mismo nombre en el otro programa)
 #define MAX_MESSAGES 10                     // Máximo nº de mensajes para la cola
 #define MAX_MSG_SIZE 256                    // Tamaño máximo de mensaje
 #define MSG_BUFFER_SIZE MAX_MSG_SIZE + 10   // Tamaño de mensaje en buffer 
@@ -28,21 +29,23 @@ float vlimite;  // Máximo valor que pueden tener las señales físicas (nº se�
 int nmaxcic;    // Nº de ciclos máximo que podemos estar sin recibir señales de tipo SIGRTMIN+i.
 int example;    // Ejemplo que se desea utilizar
 
-// Otra variable compartida que si requerirá mutex porque 
-// variará su valor durante la ejecución del programa
+// Otras variables compartidas que si requerirán mutex porque 
+// variarán su valor durante la ejecución del programa
 int overflowedSignals = 0;  // Nº de señales que tienen valor mayor que vlimite.
+int blockSignal[N_SIG];     // Matriz para la gestión de señales que se deben ignorar
 
 // Temporizador POSIX 1003.1b (declarado absoluto para recoger el tiempo absoluto).
 timer_t timerDef;
 
 // Flag de fin de programa (para que los hilos lleguen a su fin y se pueda hacer join).
 int end = 0;
-// Flag para indicar si se ha pedido fin de programa por linea de comando
+// Flag para indicar si se ha pedido fin de programa por linea de comando o no
 int out = 0;
 
 // Mutex y variables de condición asociadas a la variable overflowedSignals.
 pthread_mutex_t mut_overflowedSignals       = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t  cv_overflowedSignals        = PTHREAD_COND_INITIALIZER;
+pthread_mutex_t mut_blockSignal             = PTHREAD_MUTEX_INITIALIZER;
 
 // Manejador en el que nunca entra pero necesario para la definición.
 void handeling(int signo, siginfo_t *info, void *p){}
@@ -53,7 +56,6 @@ void *alarmManage(void *p);
 void *messageReceiver(void *p);
 void *signalExamples(void *p);
 
-
 ////////////////////////////////////////////////////// MAIN //////////////////////////////////////////////////////
 // Se encarga de recoger las variables del problema, gestionar los hilos y sus señales y
 // de recibir el fin del programa (con la recepción de la señal SIGTERM).
@@ -61,9 +63,9 @@ int main(int argc, char **_argv){
 
     // Guardar argumentos de la linea de comandos.
     printf("Variables utilizadas:\n");
-    sscanf(_argv[1], "%d", &tciclo);    printf("tciclo = %d\n", tciclo);       
-    sscanf(_argv[2], "%f", &vlimite);   printf("vlimite = %f\n", vlimite); 
-    sscanf(_argv[3], "%d", &nmaxcic);   printf("nmaxcic = %d\n", nmaxcic);
+    sscanf(_argv[1], "%d", &tciclo);    printf("\033[1;34mtciclo\033[0m = %d || ", tciclo);       
+    sscanf(_argv[2], "%f", &vlimite);   printf("\033[1;34mvlimite\033[0m = %f || ", vlimite); 
+    sscanf(_argv[3], "%d", &nmaxcic);   printf("\033[1;34mnmaxcic\033[0m = %d\n", nmaxcic);
 
     // Escoger ejemplo por línea de comandos.
     printf("Indique cual de los %d ejemplos desea utilizar: ", N_EXAMPLES);
@@ -84,6 +86,7 @@ int main(int argc, char **_argv){
     for(int i=0; i<N_SIG; i++){
         sigaction(SIGRTMIN+i, &act, NULL);          // Asociamos la acción (que es solo recibirlas) a las señales.
         sigaddset(&expectedSignals, SIGRTMIN+i);    // Añadimos al conjunto de señales las de tipo SIGRTMIN+i.
+        blockSignal[i] = 0;                         // Inicializamos con 0 la matriz de bloqueo de señales.
     }
     // Añadimos SIGRTMAX y SIGALRM al conjunto.
     sigaddset(&expectedSignals, SIGRTMAX); 
@@ -146,6 +149,9 @@ int main(int argc, char **_argv){
     // que se cierre el terminal de comandos junto al programa principal.
     if(out == 0){
         printf("\033[1;32mPulse 0 en el terminal de comandos para finalizar programa :)\n\033[0m");
+    }
+    else{
+        printf("\033[1;31mFinalización desde terminal de comandos.\n\033[0m");
     }
 
     // Espera de la finalización de los hilos.
@@ -223,7 +229,7 @@ void *signalCalc(void *p){
     // (que representa el fin de un ciclo del temporizador).
     sigaddset(&signalSet, SIGALRM);
 
-    while(!end){ // Mientras no sea el final del programa.
+    while(end!=1){ // Mientras no sea el final del programa.
         // Guardamos el valor de la señal que recibe sigwaitinfo.
         receivedSignal=sigwaitinfo(&signalSet, &in);
 
@@ -302,11 +308,20 @@ void *signalCalc(void *p){
             printf("----------------------------------------------------------\n");
         }
         else{ // Si no es SIGALRM será una de las señales de tipo SIGRTMIN + i.
-            // Cada posición del vector está asociada a una de las señales por lo que si 
-            // restamos SIGRTMIN podemos ordenar las señales como 0, 1, ...
-            // Este vector nos sirve para saber cuantas veces han llegado las señales de cada tipo
-            // antes de que acabe un ciclo de reloj (sumando 1 cada vez que llega una de las señales).
-            signalCount[receivedSignal-SIGRTMIN]++;
+            // blockSignals es una variable compartida con el hilo asociado a messageReceiver por
+            // lo que es necesario usar mutex para bloquear el uso simultáneo de esta variable.
+            pthread_mutex_lock(&mut_blockSignal);
+            // Desde el hilo de messageReceiver se deciden que señales se cuentan y que señales no.
+            // Si blockSignal[nº de la señal] = 1 quiere decir que la señal no se debe contar en este momento.
+            if (blockSignal[receivedSignal-SIGRTMIN]!=1){
+                    // Cada posición del vector está asociada a una de las señales por lo que si 
+                    // restamos SIGRTMIN podemos ordenar las señales como 0, 1, ...
+                    // Este vector nos sirve para saber cuantas veces han llegado las señales de cada tipo
+                    // antes de que acabe un ciclo de reloj (sumando 1 cada vez que llega una de las señales).
+                    signalCount[receivedSignal-SIGRTMIN]++;
+            }
+            // Liberamos el mutex porque ya se ha terminado de usar blockSignal.
+            pthread_mutex_unlock(&mut_blockSignal);
         }
     }
 
@@ -355,13 +370,10 @@ void *alarmManage(void *p){
             // la variable de condición para continuar. Se saldrá del while y se continuará a 
             // encender el indicador.
             pthread_cond_wait(&cv_overflowedSignals, &mut_overflowedSignals);
-            // Como se ha cumplido la condición encendemos el indicador.
-            // Lo encendemos dentro del while por si se recibe rápidamente que 
-            // la condición se vuelve a cumplir. Si estuviese fuera es posible 
-            // que si esto sucede demasiado rápido el indicador no se encendierá.
-            indicador(1);
         }
 
+        // Como se ha cumplido la condición encendemos el indicador.
+        indicador(1);
         // Liberamos el mutex porque ya hemos terminado de usar overflowedSignals.
         pthread_mutex_unlock(&mut_overflowedSignals);
 
@@ -374,72 +386,157 @@ void *alarmManage(void *p){
 }
 
 ////////////////////////////////////////////// HILO RECIBE MENSAJES //////////////////////////////////////////////
-// Hilo de tipo cliente. Se encargará de recibir mensajes de un servidor y dependiendo de su contenido 
-// se realizarán distintas acciones.
+// Hilo de tipo cliente. Se encargará de recibir mensajes de un servidor (terminal de comando)
+// y dependiendo del contenido del mensaje se realizarán distintas acciones.
 void *messageReceiver(void *p){
-    mqd_t receiver, commander; // id de las colas de mensajes
-    char receiverName[64];
+    mqd_t receiver, commander;  // Id de las colas de mensajes.
+    char receiverName[64];      // Nombre de la cola que recibe los comandos.
 
-    sprintf(receiverName, "/receiver-queue-%d", getpid());
+    sprintf(receiverName, "/receiver-queue-%d", getpid());  // Guardamos el nombre de la cola que recibe datos.
+                                                            // El nombre depende del valor del id del proceso porque 
+                                                            // se conecta a un servidor que puede recibir más clientes.
 
+    //Definimos la características de la cola.
     struct mq_attr attr;
-    attr.mq_flags   = 0; 
+    attr.mq_flags   = 0;                
     attr.mq_maxmsg  = MAX_MESSAGES;
     attr.mq_msgsize = MAX_MSG_SIZE;   
     attr.mq_curmsgs = 0;
 
+    // Abrimos la cola que usaremos aquí que es la que recibe los comandos desde el terminal.
+    // Se creará la cola si no existe y sino se leerá. Además damos acceso total de lectura, escritura y ejecución,
+    // y por último le asociamos los atributos anteriores.
+    // El uso del if es para detección de fallos de comunicación (para debug).
     if ((receiver = mq_open(receiverName, O_RDONLY | O_CREAT, S_IRWXU, &attr)) == -1) {
         printf("\033[1;31mFin de programa por error al crear recepción de mensajes.\n\033[0m");
         kill(getpid(), SIGTERM);
     }
 
+    // Abrimos la cola de la que recibiremos los comandos (por eso solo tenemos permisos de escritura).
+    // El uso del if es para detección de fallos de comunicación (para debug).
     if ((commander= mq_open(COMMANDER, O_WRONLY)) == -1){
         printf("\033[1;31mFin de programa por no poder contactar programa de comandos.\n\033[0m");
         kill(getpid(), SIGTERM);
     }
 
-    char inputBuffer[MSG_BUFFER_SIZE];
-    int commandReceived;
+    char inputBuffer[MSG_BUFFER_SIZE];  // Buffer de datos de entrada.
+    int commandReceived;                // Variable que contendrá el comando a ejecutar.
 
+    // Mientras no sea el fin del programa.
     while(end!=1){
-        
+        // Enviamos el nombre de la cola que va a recibir los comando a la que los va
+        // a enviar. Se hace así porque el diseño del terminal de comandos es muy parecido 
+        // al de un servidor que puede recibir distintos clientes y es necesario que
+        // cada cliente se ejecute separadamente en cada intercambio de mensajes.
+        // El tamaño del "buffer" en este caso no es más que la longitud del nombre
+        // de la cola porque no es necesario más.
+        // El uso del if es para detección de fallos de comunicación (para debug).
         if (mq_send (commander, receiverName, strlen(receiverName)+1, 0) == -1) {
             printf("\033[1;31mFin de programa por no contactar con comandos.\n033[0m");
             kill(getpid(), SIGTERM);
         }
 
+        // Aquí recibimos el comando del terminal dentro de inputBuffer.
+        // El uso del if es para detección de fallos de comunicación (para debug).
         if (mq_receive (receiver, inputBuffer, MSG_BUFFER_SIZE, NULL) == -1) {
             printf("\033[1;31mFin de programa por mala recepción.\n\033[0m");
             kill(getpid(), SIGTERM);
         }
 
+        // Leemos el valor del comando, ya que el buffer se interpreta como caracteres.
         sscanf(inputBuffer, "%d", &commandReceived);
 
-        switch (commandReceived)
-        {
-        case 0:
-        {
-            printf("\033[1;31mFin de programa solicitado desde terminal.\n\033[0m");
+        // Dependiendo del valor se ejecutan comandos differentes.
+        switch (commandReceived){
+            case 0:
+            {
+                // FIN DE PROGRAMA:
+                // Se envía la señal de fin de programa SIGTERM que se espera en el main.
+                printf("\033[1;31mFin de programa solicitado desde terminal.\n\033[0m");
+                out = 1; // Flag para indicar que se termina desde aquí el programa.
+                kill(getpid(), SIGTERM); 
+                sleep(1);   // Para asegurar que la señal se envía, 
+                            //cambia el flag de end y no se quede el 
+                            // programa colgado.
+                break;
+            }
+            case 1:
+            {
+                // IGNORAR SEÑAL:
+                // Desde el terminal de comandos se recibe que señal se desea no contar para el cálculo.
+                // Se recibe dicho valor en inputBuffer.
+                // El uso del if es para detección de fallos de comunicación (para debug).
+                int signal;
+                if (mq_receive (receiver, inputBuffer, MSG_BUFFER_SIZE, NULL) == -1) {
+                    printf("\033[1;31mFin de programa por mala recepción.\n\033[0m");
+                    kill(getpid(), SIGTERM);
+                }
+                sscanf(inputBuffer, "%d", &signal); // Leemos la señal que se quiere ignorar.
+                
+                // blockSignals es una variable compartida con el hilo asociado a signalCalc por
+                // lo que es necesario usar mutex para bloquear el uso simultáneo de esta variable.
+                pthread_mutex_lock(&mut_blockSignal);
+                if (blockSignal[signal]!=1){ // Comprobamos que no esté ya bloqueada.
+                    blockSignal[signal]=1; // Indicamos que se debe bloquear.
+                    printf("\033[1;36mSe ignorarán las señales de tipo SIGRTMIN + %d.\n\033[0m", signal);
+                }
+                else {
+                    printf("\033[1;36mSeñal ya ignorada.\n\033[0m");
+                }
+                // Liberamos el mutex porque se ha dejado de usar blockSignal.
+                pthread_mutex_unlock(&mut_blockSignal);
+                
+                break;
+            }
+            case 2:
+            {
+                // CONTAR SEÑAL:
+                // Desde el terminal de comandos se recibe que señal se desea volver a contar para el cálculo.
+                // Se recibe dicho valor en inputBuffer.
+                // El uso del if es para detección de fallos de comunicación (para debug).
+                int signal;
+                if (mq_receive (receiver, inputBuffer, MSG_BUFFER_SIZE, NULL) == -1) {
+                    printf("\033[1;31mFin de programa por mala recepción.\n\033[0m");
+                    kill(getpid(), SIGTERM);
+                }
+                sscanf(inputBuffer, "%d", &signal); //Leemos la señal que se quiere contar
 
-            out = 1;
-            kill(getpid(), SIGTERM);
-            sleep(1);
-            break;
-        }
-        
-        default:
-            printf("%d\n",commandReceived);
-            break;
+                // blockSignals es una variable compartida con el hilo asociado a signalCalc por
+                // lo que es necesario usar mutex para bloquear el uso simultáneo de esta variable.
+                pthread_mutex_lock(&mut_blockSignal);
+                if(blockSignal[signal]!=0){ // Comporbamos que no se esté contando.
+                    blockSignal[signal]=0; // Indicamos que se debe contar
+                    printf("\033[1;36mSe vuelven a contar las señales de tipo SIGRTMIN + %d.\n\033[0m", signal);
+
+                }
+                else{
+                    printf("\033[1;36mSeñal ya contada.\n\033[0m");
+                }
+                // Liberamos el mutex porque se ha dejado de usar blockSignal.
+                pthread_mutex_unlock(&mut_blockSignal);
+                
+                break;
+
+            }
+            case 3:
+            {
+                // APAGAR INDICADOR:
+                // Se envía la señal que apaga el indicador.
+                kill(getpid(), SIGRTMAX);
+                break;
+            }
         }
     }
 
+    // Cerramos la cola que recibe mensajes.
     if (mq_close (receiver) == -1) {
-        perror ("Error al cerrar.\n");
+        perror ("Error al cerrar.\n"); // Para debug.
         exit (1);
     }
 
+    // Desvinculamos la cola.
     if (mq_unlink (receiverName) == -1) {
-        perror ("Error al cerrar.\n");
+        perror ("Error al cerrar.\n"); // Para debug.
         exit (1);
     }
 
@@ -448,25 +545,58 @@ void *messageReceiver(void *p){
 //////////////////////////////////////////////// HILO EJEMPLOS ////////////////////////////////////////////////
 // Hilo que llama a varias funciones que contienen envío de señales. 
 // El ejemplo a utilizar se escoge por terminal al principio del programa.
+// Estos ejemplos se encuentran desarrollados en el archivo signalMessagesExample.c.
+// Si se desean probar otros patrones de señales se pueden crear en dicho archivo.
+// Los valores utilizados para sobrepasar rápidamente todos los límites son: 
+// tciclo = 500, vlimite = 1 y nmaxcic = 3
+// Se pueden usar otros valores, no hay problema.
 void *signalExamples(void *p){
     switch (example){
         case 1:
         {
+            // En este ejemplo se reciben dos señales de tipo SIGRTMIN
+            // primero y un segundo despues otra señal de tipo SIGRTMIN
+            // y SIGALARM para probar que se apaga el indicador. Si se deja 
+            // continuar se puede comprobar como se para el programa 
+            // (porque se cumplen los ciclos máximos sin señales) que
+            // esperará un 0 del terminal de comandos para finalizar completamente.
             testExample1();
             break;
         }
         case 2:
         {
+            // Este ejemplo está pensado para probar los comandos.
+            // Se envían constantemente todas las señales de tipo 
+            // SIGRTMIN (para N_SIG = 4) cada 500ms.
             while (end!=1){
-                testExample2(end);
+                testExample2();
             }
             break;
         }
         case 3:
         {
+            // Este ejemplo está vacío. Se parará y esperará como el ejemplo 1.
             testExample3();
             break;
         }
-
+        case 4:
+        {
+            // Envía un patrón de señales cada segundo. 
+            // Diseñado para probar los comandos y que se vea mejor la activación
+            // y desactivación de la alarma (porque el segundo ejemplo es demasiado rápido).
+            while (end!=1)
+            {
+                testExample4();
+            }
+            break;
+        }
+        case 5:
+        {
+            // Se envían unas señales de tipo SIGRTMIN primero y luego se 
+            // envía la señal SIGTERM para demostrar que el envío de dicha señal finaliza el programa.
+            // Aún así ocurre como en los otros casos: se espera que se envíe un 
+            // 0 del terminal de comandos para finalizar completamente.
+            testExample5();
+        }
     }
 }

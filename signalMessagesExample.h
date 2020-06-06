@@ -5,3 +5,5 @@
 void testExample1();
 void testExample2();
 void testExample3();
+void testExample4();
+void testExample5();

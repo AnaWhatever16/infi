@@ -6,7 +6,7 @@ void indicador(int valor){
     if (valor == 0){
         printf("\033[0;33mIndicador apagado.\n\033[0m");
     }
-    else{
+    else if (valor == 1){
         printf("\033[0;33mIndicador encendido.\n\033[0m");
     }
 }
