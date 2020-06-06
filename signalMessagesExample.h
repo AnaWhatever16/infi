@@ -1,6 +1,6 @@
 #include <unistd.h>                 // POSIX.
 #include <pthread.h>
-#define N_EXAMPLES 3
+#define N_EXAMPLES 5
 
 void testExample1();
 void testExample2();
