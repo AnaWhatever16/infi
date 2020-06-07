@@ -1,5 +1,5 @@
 #include <stdio.h> // Input/output para printf.
-#include <signal.h>                 // Señales.
+#include <signal.h>                 // Sennales.
 
 #include "signalMessagesExample.h"
 
