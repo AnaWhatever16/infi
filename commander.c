@@ -64,7 +64,7 @@ int main (int _argc, char **_argv)
         // EL comportamiento de cada comando viene explicado en el codigo de
         // solucion.c en la funcion messageReceiver.
         printf("Escriba el numero del comando que se desee realizar:\n");
-        printf("0 = \033[1;34mFIN PROGRAMA\033[0m || 1 = \033[1;34mIGNORAR SEnnAL\033[0m || 2 = \033[1;34mCONTAR SEnnAL\033[0m || 3 = \033[1;34mAPAGAR INDICADOR\033[0m\n");
+        printf("0 = \033[1;34mFIN PROGRAMA\033[0m || 1 = \033[1;34mIGNORAR SEÑAL\033[0m || 2 = \033[1;34mCONTAR SEÑAL\033[0m || 3 = \033[1;34mAPAGAR INDICADOR\033[0m\n");
         printf("Comando: ");
 
         scanf("%d", &commandSend); // Recogemos el valor del comando del terminal.
